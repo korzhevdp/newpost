@@ -518,7 +518,7 @@
 	$('#actb').click( function() {
 		selectedItems = collectSelectedItems();
 
-		$('#dialogs').empty().load("/post/dialog/prolongateFiles", function() {
+		$('#dialogs').empty().load("/post/dialog/prolongateItems", function() {
 			makeDialogWindowDraggable();
 			$('.dialog_window[ref=prolongateFiles]').removeClass("hide").fadeIn(300);
 			$('.prolongatedFilesCount').html(   selectedItems["files"].length   );
@@ -533,7 +533,7 @@
 		$('#prolongateItems').unbind().click(function() {
 			$.ajax({
 				type        : 'POST',
-				url         : '/storage/prolongateFiles',
+				url         : '/storage/prolongateItems',
 				data        : {
 					items   : selectedItems,
 					period  : $('#prolongateFor').val()

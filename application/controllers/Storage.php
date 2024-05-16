@@ -10,6 +10,7 @@ class Storage extends CI_Controller {
 		}
 		$this->load->model("sharedfunctions");
 		$this->load->model("filesystem");
+		$this->load->model("logmodel");
 		header('Content-Type: application/json');
 	}
 
@@ -104,7 +105,7 @@ class Storage extends CI_Controller {
 		}
 
 		$fileList     = json_decode(file_get_contents($filename), true);
-		$this->getFolderPath($filelist["folders"], $state["folderID"]);	// заполняем $this->listC
+		$this->getFolderPath($fileList["folders"], $state["folderID"]);	// заполняем $this->listC
 
 		$data = array(
 			/*  порядок вызова files-folders важен  :) пока */
@@ -353,8 +354,7 @@ class Storage extends CI_Controller {
 				if ( $this->filesystem->deleteFile( $unlinkFile ) ){
 					unset( $fileData["files"][$key] );
 				}
-				$string = array_push( $this->sharedfunctions->getMinimalLog( $item["userID"] ), $item["id"], $item["storageFilename"], "Удалён файл: ".$item["originalFilename"] );
-				$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+				$this->sharedfunctions->writeToLog( $this->logmodel->getDeleteFileLogString($item), $this->operationsLogFileName );
 			}
 		}
 		return $fileData;
@@ -364,8 +364,7 @@ class Storage extends CI_Controller {
 		foreach ( $fileData["folders"] as $key=>$item ) {
 			if ( in_array( $item["id"], $itemsID["folders"] ) ) {
 				unset( $fileData["folders"][$key] );
-				$string = array_push( $this->sharedfunctions->getMinimalLog( $item["userID"] ), $item["id"], $item["FolderName"], "Удалён каталог: ".$item["FolderName"] );
-				$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+				$this->sharedfunctions->writeToLog( $this->logmodel->getDeleteFolderLogString($item), $this->operationsLogFileName );
 			}
 		}
 		return $fileData;
@@ -376,10 +375,10 @@ class Storage extends CI_Controller {
 		$fileData = json_decode( file_get_contents($filename), true );
 		$itemsID  = $this->input->post("itemsID");
 		if ( isset( $itemsID["files"] ) ) {
-			$fileData = $this->deleteFiles( $fileData, $items );
+			$fileData = $this->deleteFiles( $fileData, $itemsID );
 		}
 		if ( isset( $itemsID["folders"] ) ) {
-			$fileData = $this->deleteFolders( $fileData, $items );
+			$fileData = $this->deleteFolders( $fileData, $itemsID );
 		}
 		file_put_contents( $filename, json_encode($fileData) );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
@@ -557,13 +556,23 @@ class Storage extends CI_Controller {
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
 
-
+	private function moveFolders( $fileLists, $fileData, $targetUser, $leaveAcopy ) {
+		$folderList = $this->enlistFolders( $fileLists['source']['folders'], $fileData['folders'] );
+		foreach ( $folderList as $folderData ) {
+			if ( in_array( $folderData['id'], $fileData['folders'] ) ) {
+				$folderData["parent"] = 0;
+			}
+			$fileLists = $this->moveFolder( $fileLists, $folderData, $targetUser, $leaveAcopy ) ;
+		}
+		return $fileLists;
+	}
 
 	public function moveToUser( ) {
 		$fileData        = $this->input->post("items");
 		$targetUser      = $this->input->post("targetUserID");
 		$filename        = $this->sharedfunctions->getContentFilePath( $fileData["userID"] );
 		$targetfilename  = $this->sharedfunctions->getContentFilePath( $targetUser );
+		$leaveAcopy      = $this->input->post("leaveAcopy");
 
 		if ( !file_exists($targetfilename) ) {
 			$this->filesystem->writeEmptyFileList( $targetUser );
@@ -575,20 +584,14 @@ class Storage extends CI_Controller {
 		);
 
 		if ( isset($fileData["folders"]) ) {
-			$folderList = $this->enlistFolders( $fileLists['source']['folders'], $fileData['folders'] );
-			foreach ( $folderList as $folderData ) {
-				if ( in_array( $folderData['id'], $fileData['folders'] ) ) {
-					$folderData["parent"] = 0;
-				}
-				$fileLists = $this->moveFolder( $fileLists, $folderData, $targetUser, $this->input->post("leaveAcopy") );
-			}
+			$fileLists = $this->moveFolders( $fileLists, $fileData, $targetUser, $leaveAcopy );
 		}
 
 		if ( isset( $fileData["files"] ) ) {
-			$fileLists = $this->moveFiles( $fileLists, $fileData, $targetUser, $newParent, $this->input->post("leaveAcopy") );
+			$fileLists = $this->moveFiles( $fileLists, $fileData, $targetUser, $newParent, $leaveAcopy );
 		}
 
-		if ( !$this->input->post("leaveAcopy") ) {
+		if ( !$leaveAcopy ) {
 			file_put_contents( $filename, json_encode($fileLists["source"]) );
 		}
 		file_put_contents( $targetfilename, json_encode($fileLists["target"]) );

@@ -36,7 +36,7 @@ class Filesystem extends CI_Model {
 	}
 
 	public function makeUserDir( $userID ) {
-		$userDir = $this->getUserDirPath( $userID );
+		$userDir = $this->sharedfunctions->getUserDirPath( $userID );
 		if ( !file_exists( $userDir ) ) {
 			mkdir( $userDir );
 		}
