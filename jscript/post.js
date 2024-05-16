@@ -15,7 +15,31 @@ var filterString      = '',
 	favMode           = false,
 	nativeRightClick  = true,
 	//nativeRightClick  = false,
-	sortPattern       = [1, 0, 0, 0];
+	sortPattern       = [1, 0, 0, 0],
+	sortFields        = {
+		0 : "originalFilename",
+		1 : "fileSize",
+		2 : "creationDate",
+		3 : "deletionDate"
+	},
+	sortFunctions     = {
+		"originalFilename" : function( a, b, rev ) {
+			var x = a[sortFields[0]].toLowerCase(),
+				y = b[sortFields[0]].toLowerCase();
+			if ( x < y ) { return -1 * rev; }
+			if ( x > y ) { return  1 * rev; }
+			return 0;
+		},
+		"fileSize"         : function( a, b, rev ) {
+			return (parseInt(a[sortFields[1]], 10) - parseInt(b[sortFields[1]], 10)) * rev;
+		},
+		"creationDate"     : function( a, b, rev ) {
+			return (parseInt(a[sortFields[2]], 10) - parseInt(b[sortFields[2]], 10)) * rev;
+		},
+		"deletionDate"     : function( a, b, rev ) {
+			return (parseInt(a[sortFields[3]], 10) - parseInt(b[sortFields[3]], 10)) * rev;
+		}
+	};
 
 //////////////////////////////////////////////////////////////////////////////////////
 function close_dialog() {
@@ -207,51 +231,49 @@ function showUserFiles( userID, showfiles, folderID ) {
 		},
 
 		success       : function(data) {
-			filesData = data;
-
-			$('#fio_search').focus();
-			// сборка списка файлов
-			$("#help_content, .easterEgg, #album, #files").addClass("hide");
-			$("#filelist, #folders").removeClass("hide");
-			$('#folders').empty().append( getFoldersTable(filesData.folders, filesData.treePosition.folderName.current, filesData.treePosition.folderName.parent) );
-			//$('#files').empty().append( getFilesTable(filesData.files) );
-			//resizeTabHeader('filelist'); // что-то демоническое
-			//console.log( parentFolderID /*filesData.files.length, filesData.folders.length, filesData.treePosition.folderName.parent*/ )
+			filesData    = data;
 			tableContent = getFilesTable(filesData.files);
+
 			if ( filesData.files.length + filesData.folders.length == 0 ) {
 				if ( filesData.treePosition.folderName.current.length < 2 ) {
 					tableContent = filesData.html;
 				}
 			}
-			$('#files').empty().append( tableContent ).removeClass("hide");
 
 			parentFolderID = filesData.treePosition.folderName.current;
-
 			folderName = ( filesData.treePosition.folderName.name === undefined ) 
 				? ""
 				: filesData.treePosition.folderName.name;
-
-			$('#folderpath').empty().append(createFolderPath( filesData.folderData ) );
-
-			$('#toolmessage').empty().append('<a href="/post/' + currentUserID +' " class="fl_bar_fio" title="Постоянная ссылка для размещения в &laquo;Закладках&raquo;">' + filesData.userdata.name + '</a>, тел: ' + filesData.userdata.phone + '; ' + filesData.userdata.department);
-
 			if ( filesData.hasHTML ) {
 				setSubstitutionalViewHandler();
 			}
 
-			if ( filesData.hasAlbum ) {
-				$("#switchToAlbum").removeClass('toolbtn_off').addClass('toolbtn');
-			}
-
+			setVisualElements( tableContent, filesData, currentUserID );
 			setSortIndicators();
 			setFileListHandlers();
-			$("#makeFolder").removeClass('toolbtn_off').addClass('toolbtn');
 		},
 		error         : function( data, stat, err ) {
 			console.log( data, stat, err );
 		}
 	});
 }
+
+function setVisualElements( tableContent, filesData, currentUserID ) {
+	$('#fio_search').focus();
+	// сборка списка файлов
+	$("#help_content, .easterEgg, #album, #files").addClass("hide");
+	$("#filelist, #folders").removeClass("hide");
+	if ( filesData.hasAlbum ) {
+		$("#switchToAlbum").removeClass('toolbtn_off').addClass('toolbtn');
+	}
+	$("#makeFolder").removeClass('toolbtn_off').addClass('toolbtn');
+
+	$('#files').empty().append( tableContent ).removeClass("hide");
+	$('#folderpath').empty().append(createFolderPath( filesData.folderData ) );
+	$('#folders').empty().append( getFoldersTable(filesData.folders, filesData.treePosition.folderName.current, filesData.treePosition.folderName.parent) );
+	$('#toolmessage').empty().append('<a href="/post/' + currentUserID +' " class="fl_bar_fio" title="Постоянная ссылка для размещения в &laquo;Закладках&raquo;">' + filesData.userdata.name + '</a>, тел: ' + filesData.userdata.phone + '; ' + filesData.userdata.department);
+}
+
 
 function createFolderPath( folderData ) {
 	var out = [ '<span class="topNavLink" currentUserID="' + currentUserID + '" folder=0 title="Начало">&equiv;</span>' ];
@@ -336,13 +358,13 @@ function getFileItem(item) {
 }
 
 function getFolderItem(item) {
-	return '<tr class="trlist" itemType="folder" userID="' + item.userID + '" itemID="' + item.id + '">' +
+	return '<tr class="trlist" itemType="folder" itemID="' + item.id + '" userID="' + item.userID + '">' +
 		'<td class="cflist col1">' +
-			'<input type="checkbox" class="itemChecker" itemType="folder" userID="' + item.userID + '" itemID="' + item.id + '">' +
+			'<input type="checkbox" itemType="folder" userID="' + item.userID + '" itemID="' + item.id + '" class="itemChecker">' +
 		'</td>' +
-		'<td class="cflist t_filename col2" itemType="folder" userID="' + item.userID + '" itemID="' + item.id + '">' +
+		'<td itemID="' + item.id + '" itemType="folder" userID="' + item.userID + '" class="cflist t_filename col2">' +
 			'<img class="ico" src="/images/ico/folder.png">&nbsp;' +
-			'<a class="fhref" href="#" itemType="folder" userID="' + item.userID + '" itemID="' + item.id + '" title="' + item.comments + '">' + item.folderName + '</a>' +
+			'<a class="fhref" userID="' + item.userID + '" itemType="folder" itemID="' + item.id + '" target="_blank" title="' + item.comments + '" href="#">' + item.folderName + '</a>' +
 		'</td>' +
 		'<td class="cflist col3">' +
 			'<acronym title="Папок: ' + item.foldersCount + ' / Файлов: ' + item.filesCount + '">&lsaquo; Папка &rsaquo;</acronym>' +
@@ -423,7 +445,8 @@ function setFileListHandlers() {
 		}).fadeIn(300);
 	});
 
-	$('.fhref[itemtype=folder]').unbind().click(function(){
+	$('.fhref[itemtype=folder]').unbind().click(function( event ){
+		event.preventDefault();
 		change_folder( $(this).attr("itemID") );
 	});
 
@@ -447,30 +470,6 @@ function setFileListHandlers() {
 }
 
 function sortFiles(srcArray, sortPattern) {
-	var sortFields = {
-		0 : "originalFilename",
-		1 : "fileSize",
-		2 : "creationDate",
-		3 : "deletionDate"
-	},
-	sortFunctions = {
-		"originalFilename" : function( a, b, rev ) {
-			var x = a[sortFields[0]].toLowerCase(),
-				y = b[sortFields[0]].toLowerCase();
-			if ( x < y ) { return -1 * rev; }
-			if ( x > y ) { return  1 * rev; }
-			return 0;
-		},
-		"fileSize"         : function( a, b, rev ) {
-			return (parseInt(a[sortFields[1]], 10) - parseInt(b[sortFields[1]], 10)) * rev;
-		},
-		"creationDate"     : function( a, b, rev ) {
-			return (parseInt(a[sortFields[2]], 10) - parseInt(b[sortFields[2]], 10)) * rev;
-		},
-		"deletionDate"     : function( a, b, rev ) {
-			return (parseInt(a[sortFields[3]], 10) - parseInt(b[sortFields[3]], 10)) * rev;
-		}
-	};
 	for ( d in sortPattern ) {
 		if ( sortPattern[d] == 0 ) { continue; }
 		rev = (sortPattern[d] == 2) ? -1 : 1;
