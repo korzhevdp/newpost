@@ -186,4 +186,28 @@ class Management extends CI_Controller {
 	public function graph( $parameter ) {
 		print "";
 	}
+
+	private function syncUserData( $userID = 0 ) {
+		$filename = "userdata/userlist.json";
+		$userData = json_decode(file_get_contents($filename), true);
+		if ( !isset( $userData[$userID]["name"] ) ) {
+			return false;
+		}
+		$request = array(
+			'fio' => $userData[$userID]["name"]
+		);
+		$options = array(
+			'http' => array(
+				'content'	=> http_build_query($request),
+				'header'	=> 'Content-type: application/x-www-form-urlencoded',
+				'method'	=> 'POST'
+			)
+		);
+		$context  = stream_context_create($options);
+		$userInfo = json_decode(file_get_contents("http://192.168.1.35/opendata/getUserInfo", false, $context), true);
+		$userData[$userID]["phone"]      = $userInfo["phone"];
+		$userData[$userID]["userID"]     = $userInfo["id"];
+		$userData[$userID]["department"] = $userInfo["dn"];
+		file_put_contents( $filename, json_encode($userData) );
+	}
 }

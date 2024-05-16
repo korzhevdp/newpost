@@ -26,4 +26,16 @@ class Sharedfunctions extends CI_Model {
 			mt_rand(0, 0xffff)
 		);
 	}
+
+	public function writeToLog( $string, $logFile ) {
+		file_put_contents($logFile, $string."\r\n", FILE_APPEND);
+	}
+
+	public function getMinimalLog( $userID ) {
+		return array(
+			date("Y-m-d H:i:s"),
+			$this->input->ip_address(),
+			$userID
+		);
+	}
 }

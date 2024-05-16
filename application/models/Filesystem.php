@@ -56,4 +56,27 @@ class Filesystem extends CI_Model {
 		//print $command."\n\n";
 	}
 
+	public function getFreeSpace( ) {
+		print floor( disk_free_space("D:") / ( 1024 * 1024 ) );
+	}
+
+	public function getFileSize( $userID, $fileID ) {
+		$filename = $this->sharedfunctions->getContentFilePath( $userID );
+		$filelist = json_decode(file_get_contents($filename), true);
+		foreach ( $filelist['files'] as $key=>$item ) {
+			if ( $fileID == $item['id'] ) {
+				$fileSName = $this->sharedfunctions->getUserDirPath( $userID ).$item["storageFilename"];
+				$filelist['files'][$key]["fileSize"] = ( file_exists($fileSName) ) ? filesize($fileSName) : 0;
+				file_put_contents($filename, json_encode($filelist));
+				return $filelist['files'][$key]["fileSize"];
+			}
+		}
+	}
+
+	public function writeEmptyFileList( $userID ) {
+		$filename = $this->sharedfunctions->getContentFilePath( $userID );
+		$this->filesystem->makeUserDir( $userID );
+		file_put_contents( $filename, json_encode( array( "files" => array() , "folders"  => array() ) ) );
+	}
+
 }

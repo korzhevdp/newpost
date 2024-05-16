@@ -13,7 +13,6 @@ class Storage extends CI_Controller {
 		header('Content-Type: application/json');
 	}
 
-	public function index() {}
 	private $operationsLogFileName = "logs/operations.log";
 	private $downloadLogFileName   = "logs/download.log";
 	private $uploadLogFileName     = "logs/upload.log";
@@ -26,91 +25,97 @@ class Storage extends CI_Controller {
 	);
 	private $listD                 = array(); // буфер для переносимых папок
 	private $listC                 = array(); // буфер для путей папок
+	private $logOutput             = array();
 
-	private function getContentFilePath( $userID ) {
-		return $this->config->item("storageLocation").$userID.DIRECTORY_SEPARATOR."contents.json";
+	private function sendHeaders( $fileData, $fileName ) {
+		header('Content-Description: File Transfer');
+		header('Content-Type: application/octet-stream');
+		header('Content-Disposition: attachment; filename='.$fileData["originalFilename"]); 
+		header('Content-Transfer-Encoding: binary');
+		header('Connection: Keep-Alive');
+		header('Expires: 0');
+		header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
+		header('Pragma: public');
+		header('Content-Length: '.filesize($fileName));
 	}
 
-	private function getUserDirPath( $userID ) {
-		return $this->config->item("storageLocation").$userID.DIRECTORY_SEPARATOR;
-	}
-
-	private function writeToLog( $string, $logFile ) {
-		file_put_contents($logFile, $string."\r\n", FILE_APPEND);
+	private function isDownloadPermitted( $fileData, $userID, $JSONFileName, $JSONfile, $fileID ) {
+		if ( $fileData['downloadLimit'] == 0 ) {
+			$string = array_push( $this->sharedfunctions->getMinimalLog( $userID ),
+				$fileID,
+				$fileData["storageFilename"],
+				$fileData["originalFilename"],
+				"Достигнут лимит скачиваний файла"
+			);
+			$this->sharedfunctions->writeToLog( implode("\t", $string), $this->downloadLogFileName );
+			header("HTTP/1.0 404 Not Found");
+			return false;
+		}
+		$JSONfile['files'][$key]["downloadLimit"] = ($JSONfile['files'][$key]["downloadLimit"] <= -1)
+			? -1
+			: $JSONfile['files'][$key]["downloadLimit"] - 1;
+		file_put_contents( $JSONFileName, json_encode($JSONfile) );
+		return true;
 	}
 
 	public function download( $userID, $fileID ) {
-		$JSONFileName = $this->getContentFilePath( $userID );
+		$JSONFileName = $this->sharedfunctions->getContentFilePath( $userID );
 		$JSONfile     = json_decode( file_get_contents($JSONFileName), true );
 		foreach( $JSONfile['files'] as $key=>$fileData ) {
 			if ( $fileData['id'] == $fileID ) {
-				if ( $fileData['downloadLimit'] == 0 ){
-					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $userID, $fileID, $fileData["storageFilename"], $fileData["originalFilename"], "Достигнут лимит скачиваний файла" );
-					$this->writeToLog( implode("\t", $string), $this->downloadLogFileName );
-					return false;
+				if ( !$this->isDownloadPermitted( $fileData, $userID, $JSONFileName, $JSONfile, $fileID ) ) {
+					continue;
 				}
-				$JSONfile['files'][$key]["downloadLimit"] = ($JSONfile['files'][$key]["downloadLimit"] <= -1)
-					? -1
-					: $JSONfile['files'][$key]["downloadLimit"] - 1;
-				file_put_contents( $JSONFileName, json_encode($JSONfile) );
 
-				$fileName = $this->config->item("storageLocation").$userID.DIRECTORY_SEPARATOR.$fileData["storageFilename"];
-				header('Content-Description: File Transfer');
-				header('Content-Type: application/octet-stream');
-				header('Content-Disposition: attachment; filename='.$fileData["originalFilename"]); 
-				header('Content-Transfer-Encoding: binary');
-				header('Connection: Keep-Alive');
-				header('Expires: 0');
-				header('Cache-Control: must-revalidate, post-check=0, pre-check=0');
-				header('Pragma: public');
-				header('Content-Length: '.filesize($fileName));
+				$fileName = $this->sharedfunctions->getUserDirPath( $userID ).$fileData["storageFilename"];
+				$this->sendHeaders( $fileData, $fileName );
 				print file_get_contents($fileName);
 
-				$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $userID, $fileID, $fileData["storageFilename"], $fileData["originalFilename"], "Файл скачан с сервера" );
-				$this->writeToLog( implode("\t", $string), $this->downloadLogFileName );
+				$string = array_push( $this->sharedfunctions->getMinimalLog( $userID ),
+					$fileID,
+					$fileData["storageFilename"],
+					$fileData["originalFilename"],
+					"Файл скачан с сервера"
+				);
+				$this->sharedfunctions->writeToLog( implode("\t", $string), $this->downloadLogFileName );
 				return true;
 			}
 		}
 	}
 
-	public function getFileList() {
-		$state = array(
+	private function composeStateStructure() {
+		return array(
 			"userID"         => $this->input->post("userID"),
 			"parentFolderID" => 0,
 			"folderID"       => $this->input->post("folderID"),
 			"sortMode"       => $this->input->post("sorts")
 		);
+	}
 
-		$filename  = $this->getContentFilePath( $state["userID"] );
-		$HTMLFile  = $this->getUserDirPath( $state["userID"] )."index.html" ;
-		$albumFile = $this->getUserDirPath( $state["userID"] )."photoalbum-".$state["folderID"].".html";
-		$this->syncUserData( $state["userID"] );
+	public function getFileList() {
+		$state = $this->composeStateStructure();
+
+		$filename  = $this->sharedfunctions->getContentFilePath( $state["userID"] );
+		$HTMLFile  = $this->sharedfunctions->getUserDirPath( $state["userID"] )."index.html" ;
+		$albumFile = $this->sharedfunctions->getUserDirPath( $state["userID"] )."photoalbum-".$state["folderID"].".html";
 
 		if ( !file_exists($filename) ) {
-			$this->writeEmptyFileList( $state["userID"] );
+			$this->filesystem->writeEmptyFileList( $state["userID"] );
 		}
 
-		$fileOutput   = array();
-		$folderOutput = array();
-		$filelist     = json_decode(file_get_contents($filename), true);
-		$hasHTML      = file_exists($HTMLFile);
-		$html         = ($hasHTML)
-			? file_get_contents($HTMLFile)
-			: $this->load->view("filestoragetableempty", array(), true);
-		
-		// заполняем $this->listC
-		$this->getFolderPath($filelist["folders"], $state["folderID"]);
+		$fileList     = json_decode(file_get_contents($filename), true);
+		$this->getFolderPath($filelist["folders"], $state["folderID"]);	// заполняем $this->listC
 
 		$data = array(
 			/*  порядок вызова files-folders важен  :) пока */
-			"files"        => $this->collectFilesList( $filelist["files"], $state ),
-			"folders"      => $this->collectFoldersList( $filelist["folders"], $state ),
+			"files"        => $this->collectFilesList( $fileList["files"], $state ),
+			"folders"      => $this->collectFoldersList( $fileList["folders"], $state ),
 			"folderData"   => array_reverse($this->listC),
 			"userdata"     => $this->getUserData( $state["userID"] ),
-			"treePosition" => $this->getCurrentPosition( $filelist["folders"], $state ),
+			"treePosition" => $this->getCurrentPosition( $fileList["folders"], $state ),
 			"hasHTML"      => file_exists( $HTMLFile  ),
 			"hasAlbum"     => file_exists( $albumFile ),
-			"html"         => $html
+			"html"         => ( file_exists($HTMLFile) ) ? file_get_contents($HTMLFile) : $this->load->view("filestoragetableempty", array(), true)
 		);
 		print json_encode($data);
 		return true;
@@ -154,19 +159,6 @@ class Storage extends CI_Controller {
 		return $output;
 	}
 
-	private function getFileSize( $userID, $fileID ) {
-		$filename = $this->getContentFilePath( $userID );
-		$filelist = json_decode(file_get_contents($filename), true);
-		foreach ($filelist['files'] as $key=>$item) {
-			if ( $fileID == $item['id'] ) {
-				$fileSName = $this->getUserDirPath( $userID ).$item["storageFilename"];
-				$filelist['files'][$key]["fileSize"] = ( file_exists($fileSName) ) ? filesize($fileSName) : 0;
-				file_put_contents($filename, json_encode($filelist));
-				return $filelist['files'][$key]["fileSize"];
-			}
-		}
-	}
-
 	private function collectFilesList( $list, $state ) {
 		//print_r($list);
 		$output = array();
@@ -184,7 +176,7 @@ class Storage extends CI_Controller {
 			$storageItem["fileStyle"] = ($storageItem["originalFilename"] == "index.html") ? "fileType index" : "";
 			$storageItem["fileSize"]  = ( isset($storageItem["fileSize"]) && $storageItem["fileSize"] )
 				? $storageItem["fileSize"]
-				: $this->getFileSize( $state["userID"], $storageItem["id"] );
+				: $this->filesystem->getFileSize( $state["userID"], $storageItem["id"] );
 			$storageItem["humanCreationDate"] = date("d.m.Y H:i", $storageItem["creationDate"]);
 			$storageItem["humanDeletionDate"] = ( $storageItem["deletionDate"] == "eternal" )
 				? "-- / --"
@@ -197,9 +189,6 @@ class Storage extends CI_Controller {
 
 	private function collectFoldersList( $list, $state ) {
 		$output = array();
-		//if ( (int) $state["folderID"] > 0 ) {
-			//array_push( $output, $this->load->view("upfolderitem", array("id" => 0, "comments" => ""), true) );
-		//}
 		// first pass -- statistics
 		foreach ( $list as $storageItem ) {
 			if ( !isset( $this->foldersCount[$storageItem["parent"]] ) ) {
@@ -227,32 +216,8 @@ class Storage extends CI_Controller {
 		return $output;
 	}
 
-	private function syncUserData( $userID = 0 ) {
-		$filename = "userdata/userlist.json";
-		$userData = json_decode(file_get_contents($filename), true);
-		if ( !isset( $userData[$userID]["name"] ) ) {
-			return false;
-		}
-		$request = array(
-			'fio' => $userData[$userID]["name"]
-		);
-		$options = array(
-			'http' => array(
-				'content'	=> http_build_query($request),
-				'header'	=> 'Content-type: application/x-www-form-urlencoded',
-				'method'	=> 'POST'
-			)
-		);
-		$context  = stream_context_create($options);
-		$userInfo = json_decode(file_get_contents("http://192.168.1.35/opendata/getUserInfo", false, $context), true);
-		$userData[$userID]["phone"]      = $userInfo["phone"];
-		$userData[$userID]["userID"]     = $userInfo["id"];
-		$userData[$userID]["department"] = $userInfo["dn"];
-		file_put_contents( $filename, json_encode($userData) );
-	}
-
 	public function showIndex( $userID = 0 ) {
-		$filename = $this->getUserDirPath( $userID )."index.html";
+		$filename = $this->sharedfunctions->getUserDirPath( $userID )."index.html";
 		header("Content-Type: text/html");
 		print file_get_contents($filename);
 	}
@@ -267,7 +232,7 @@ class Storage extends CI_Controller {
 	public function makeAlbum( $userID = 0, $folderID = 0 ) {
 		$userID   = ($userID)   ? $userID   : $this->input->post("userID");
 		$folderID = ($folderID) ? $folderID : $this->input->post("folderID");
-		$fileName = $this->getContentFilePath( $userID );
+		$fileName = $this->sharedfunctions->getContentFilePath( $userID );
 		$data     = json_decode( file_get_contents($fileName), true );
 		$output   = array();
 		foreach ( $data["files"] as $item ) {
@@ -280,7 +245,7 @@ class Storage extends CI_Controller {
 		}
 		sort( $output );
 		file_put_contents(
-			$this->getUserDirPath( $userID )."photoalbum-".$folderID.".html",
+			$this->sharedfunctions->getUserDirPath( $userID )."photoalbum-".$folderID.".html",
 			implode( "\n", $output )
 		);
 
@@ -288,19 +253,19 @@ class Storage extends CI_Controller {
 	}
 
 	public function albumItem( $userID, $imageID ) {
-		print file_get_contents( $this->getUserDirPath( $userID ).$imageID );
+		print file_get_contents( $this->sharedfunctions->getUserDirPath( $userID ).$imageID );
 	}
 
 	public function getFileInfo( $userID = 0, $itemID = 0 ) {
 		$userID   = ($userID) ? $userID : $this->input->post("userID");
 		$itemID   = ($itemID) ? $itemID : $this->input->post("itemID");
-		$fileName = $this->getContentFilePath( $userID );
+		$fileName = $this->sharedfunctions->getContentFilePath( $userID );
 		$data     = json_decode(file_get_contents($fileName), true);
 		foreach ( $data["files"] as $item ) {
 			if ( $item["id"] == $itemID ) {
 				$item["creationDate"] = date( "d.m.Y H:i:s", $item["creationDate"] );
 				$item["fileSize"]     = (!isset($item["fileSize"]) || $item["fileSize"] == 0)
-					? filesize( $this->getUserDirPath( $userID ).$item["storageFilename"] )
+					? filesize( $this->sharedfunctions->getUserDirPath( $userID ).$item["storageFilename"] )
 					: $item["fileSize"];
 				$item["deletionDate"] = date("Y-m-d", $item["deletionDate"]);
 				unset($item["storageFilename"]);
@@ -313,7 +278,7 @@ class Storage extends CI_Controller {
 	public function getFolderInfo( $userID = 0, $itemID = 0 ) {
 		$userID   = ($userID) ? $userID : $this->input->post("userID");
 		$itemID   = ($itemID) ? $itemID : $this->input->post("itemID");
-		$fileName = $this->getContentFilePath( $userID );
+		$fileName = $this->sharedfunctions->getContentFilePath( $userID );
 		$data     = json_decode( file_get_contents($fileName), true );
 		foreach ( $data["folders"] as $item ) {
 			if ( $item["id"] == $itemID ) {
@@ -329,14 +294,14 @@ class Storage extends CI_Controller {
 		//$this->output->enable_profiler(true);
 		$userID   = ($userID) ? $userID : $this->input->post("userID");
 		$itemID   = ($itemID) ? $itemID : $this->input->post("itemID");
-		$filename = $this->getContentFilePath( $userID );
+		$filename = $this->sharedfunctions->getContentFilePath( $userID );
 		$fileData = json_decode( file_get_contents($filename), true );
 		if ( $this->input->post("itemType") == "folderInfo" ) {
 			foreach ( $fileData['folders'] as $key => $item ) {
 				if ( $itemID == $item["id"] ) {
 					$fileData['folders'][$key]["comments"] = $this->input->post("comment");
 					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["name"], "Добавлен комментарий к директории" );
-					$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+					$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
 				}
 			}
 		}
@@ -346,7 +311,7 @@ class Storage extends CI_Controller {
 					$fileData['files'][$key]["comments"]     = $this->input->post("comment");
 					$fileData['files'][$key]["deletionDate"] = date_format(date_create_from_format("Y-m-d", $this->input->post("deletionDate")), "U");
 					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["name"], "Добавлен комментарий, установлена дата удаления: ".$this->input->post("deletionDate"));
-					$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+					$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
 				}
 			}
 		}
@@ -355,14 +320,14 @@ class Storage extends CI_Controller {
 
 	public function saveItemName( ) {
 		//$this->output->enable_profiler(true);
-		$filename = $this->getContentFilePath( $this->input->post("userID") );
+		$filename = $this->sharedfunctions->getContentFilePath( $this->input->post("userID") );
 		$fileData = json_decode(file_get_contents($filename), true);
 		if ( $this->input->post("itemType") == "file" ) {
 			foreach ( $fileData["files"] as $key=>$item ) {
 				if ( $item["id"] == $this->input->post("itemID") ) {
 					$fileData["files"][$key]["originalFilename"] = preg_replace("/\[\/\\:\*\?\"<>\|\]/", "_", $this->input->post("newName"));
 					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["originalFilename"], "Установлено новое публичное имя файла: ".$this->input->post("newName"));
-					$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+					$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
 					break;
 				}
 			}
@@ -372,7 +337,7 @@ class Storage extends CI_Controller {
 				if ( $item["id"] == $this->input->post("itemID") ) {
 					$fileData["folders"][$key]["folderName"] = preg_replace("/\[\/\\:\*\?\"<>\|\]/", "_", $this->input->post("newName"));
 					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["FolderName"], "Установлено новое каталога: ".$this->input->post("newName"));
-					$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+					$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
 					break;
 				}
 			}
@@ -381,44 +346,52 @@ class Storage extends CI_Controller {
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
 
+	private function deleteFiles( $fileData, $items ) {
+		foreach ( $fileData["files"] as $key=>$item ) {
+			if ( in_array( $item["id"], $items["files"] ) ) {
+				$unlinkFile = $this->sharedfunctions->getUserDirPath( $item["userID"] ).$item["storageFilename"];
+				if ( $this->filesystem->deleteFile( $unlinkFile ) ){
+					unset( $fileData["files"][$key] );
+				}
+				$string = array_push( $this->sharedfunctions->getMinimalLog( $item["userID"] ), $item["id"], $item["storageFilename"], "Удалён файл: ".$item["originalFilename"] );
+				$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+			}
+		}
+		return $fileData;
+	}
+
+	private function deleteFolders( ) {
+		foreach ( $fileData["folders"] as $key=>$item ) {
+			if ( in_array( $item["id"], $itemsID["folders"] ) ) {
+				unset( $fileData["folders"][$key] );
+				$string = array_push( $this->sharedfunctions->getMinimalLog( $item["userID"] ), $item["id"], $item["FolderName"], "Удалён каталог: ".$item["FolderName"] );
+				$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+			}
+		}
+		return $fileData;
+	}
+
 	public function deleteItems( ) {
-		$filename = $this->getContentFilePath( $this->input->post("userID") );
-		$fileData = json_decode(file_get_contents($filename), true);
+		$filename = $this->sharedfunctions->getContentFilePath( $this->input->post("userID") );
+		$fileData = json_decode( file_get_contents($filename), true );
 		$itemsID  = $this->input->post("itemsID");
 		if ( isset( $itemsID["files"] ) ) {
-			foreach ( $fileData["files"] as $key=>$item ) {
-				if ( in_array( $item["id"], $itemsID["files"] ) ) {
-					$unlinkFile = $this->getUserDirPath( $item["userID"] ).$item["storageFilename"];
-					if ( $this->filesystem->deleteFile( $unlinkFile ) ){
-						unset( $fileData["files"][$key] );
-					}
-					$string     = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["storageFilename"], "Удалён файл: ".$item["originalFilename"] );
-					$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
-				}
-			}
+			$fileData = $this->deleteFiles( $fileData, $items );
 		}
 		if ( isset( $itemsID["folders"] ) ) {
-			foreach ( $fileData["folders"] as $key=>$item ) {
-				if ( in_array( $item["id"], $itemsID["folders"] ) ) {
-					unset( $fileData["folders"][$key] );
-					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["FolderName"], "Удалён каталог: ".$item["FolderName"] );
-					$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
-				}
-			}
+			$fileData = $this->deleteFolders( $fileData, $items );
 		}
-		file_put_contents($filename, json_encode($fileData));
+		file_put_contents( $filename, json_encode($fileData) );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
 
-	public function getFreeSpace( ) {
-		print floor( disk_free_space("D:") / ( 1024 * 1024 ) );
+	public function getFreeSpace() {
+		$this->filesystem->getFreeSpace();
 	}
-
-
 
 	public function uploadFiles( ) {
 		$userID   = $this->input->post("userID");
-		$filename = $this->getContentFilePath( $userID );
+		$filename = $this->sharedfunctions->getContentFilePath( $userID );
 		$filelist = json_decode(file_get_contents($filename), true);
 		$this->filesystem->makeUserDir( $userID );
 
@@ -437,7 +410,7 @@ class Storage extends CI_Controller {
 			"tags"             => "",
 			"comments"         => ""
 		);
-		move_uploaded_file( $_FILES["files"]["tmp_name"], $this->getUserDirPath( $newFileData["userID"] ).$newFileData["storageFilename"] );
+		move_uploaded_file( $_FILES["files"]["tmp_name"], $this->sharedfunctions->getUserDirPath( $newFileData["userID"] ).$newFileData["storageFilename"] );
 		array_push( $filelist["files"], $newFileData );
 		file_put_contents( $filename, json_encode($filelist) );
 
@@ -449,44 +422,54 @@ class Storage extends CI_Controller {
 			$newFileData["storageFilename"],
 			"На сервер загружен файл: ".$newFileData["originalFilename"]
 		);
-		$this->writeToLog( implode("\t", $string), $this->uploadLogFileName );
+		$this->sharedfunctions->writeToLog( implode("\t", $string), $this->uploadLogFileName );
+	}
+	/* jsonStorage operations */
+	private function prolongateFiles ( $filelist, $fileData, $period ) {
+		foreach ( $filelist["files"] as $key=>$itemData ) {
+			if ( in_array( $itemData["id"], $fileData['files'] ) ) {
+				$filelist["files"][$key]['deletionDate'] = ( $period == "eternal" )
+					? $period
+					: date("U") + ( $period * 60 * 60 * 24 );
+				$string = array_push( $this->sharedfunctions->getMinimalLog( $fileData["userID"] ), $itemData["id"], $itemData["storageFilename"], "Продлён срок жизни файла: ".$itemData["originalFilename"]." на ".$period." дней" );
+				array_push( $this->logOutput, implode("\t", $string) );
+			}
+		}
+		return $filelist;
 	}
 
-	public function prolongateFiles( ) {
-		$logOutput = array();
+	private function prolongateFolders( $filelist, $fileData, $period ) {
+		foreach ( $filelist["folders"] as $key=>$itemData ) {
+			if ( in_array( $itemData["id"], $fileData["folders"] ) ) {
+				$filelist["folders"][$key]['deletionDate'] = ($period == "eternal")
+					? $period
+					: date("U") + ( $period * 60 * 60 * 24 );
+				$string = array_push( $this->sharedfunctions->getMinimalLog( $fileData["userID"] ), $itemData["id"], $itemData["folderName"], "Продлён срок жизни каталога: ".$itemData["folderName"]." на ". $period." дней" );
+				array_push($this->logOutput, implode("\t", $string));
+			}
+		}
+		return $filelist;
+	}
+
+	public function prolongateItems( ) {
+		$this->logOutput = array();
 		$fileData  = $this->input->post("items");
-		$filename  = $this->getContentFilePath( $fileData["userID"] );
+		$filename  = $this->sharedfunctions->getContentFilePath( $fileData["userID"] );
 		$filelist  = json_decode(file_get_contents($filename), true);
 		if ( isset( $fileData["files"] ) ) {
-			foreach ( $filelist["files"] as $key=>$itemData ) {
-				if ( in_array( $itemData["id"], $fileData['files'] ) ) {
-					$filelist["files"][$key]['deletionDate'] = ($this->input->post("period") == "eternal")
-						? $this->input->post("period")
-						: date("U") + ( $this->input->post("period") * 60 * 60 * 24 );
-					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $fileData["userID"], $itemData["id"], $itemData["storageFilename"], "Продлён срок жизни файла: ".$itemData["originalFilename"]." на ". $this->input->post("period")." дней" );
-					array_push( $logOutput, implode("\t", $string) );
-				}
-			}
+			$filelist = $this->prolongateFiles( $filelist, $fileData, $this->input->post("period") );
 		}
 		if ( isset($fileData["folders"]) ) {
-			foreach ( $filelist["folders"] as $key=>$itemData ) {
-				if ( in_array( $itemData["id"], $fileData["folders"] ) ) {
-					$filelist["folders"][$key]['deletionDate'] = ($this->input->post("period") == "eternal")
-						? $this->input->post("period")
-						: date("U") + ( $this->input->post("period") * 60 * 60 * 24 );
-					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $fileData["userID"], $itemData["id"], $itemData["folderName"], "Продлён срок жизни каталога: ".$itemData["folderName"]." на ". $this->input->post("period")." дней" );
-					array_push($logOutput, implode("\t", $string));
-				}
-			}
+			$filelist = $this->prolongateFolders( $filelist, $fileData, $this->input->post("period") );
 		}
 		file_put_contents( $filename, json_encode($filelist) );
-		$this->writeToLog( implode("\r\n", $logOutput), $this->operationsLogFileName );
+		$this->sharedfunctions->writeToLog( implode("\r\n", $this->logOutput), $this->operationsLogFileName );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
 
 	public function createFolder( ) {
 		$userID        = $this->input->post("userID");
-		$filename      = $this->getContentFilePath( $userID );
+		$filename      = $this->sharedfunctions->getContentFilePath( $userID );
 		$filelist      = json_decode(file_get_contents($filename), true);
 		$newFolderData = array(
 			"id"               => $this->sharedfunctions->getUUID(),
@@ -503,13 +486,13 @@ class Storage extends CI_Controller {
 		array_push( $filelist["folders"], $newFolderData );
 		file_put_contents( $filename, json_encode($filelist) );
 
-		$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $newFolderData["userID"], $newFolderData["id"], $newFolderData["folderName"], "Создан каталог: ".$newFolderData["folderName"]." (90 дней)" );
-		$this->writeToLog( implode("\t", $string), $this->uploadLogFileName );
+		$string = array_push( $this->sharedfunctions->getMinimalLog( $newFolderData["userID"] ), $newFolderData["id"], $newFolderData["folderName"], "Создан каталог: ".$newFolderData["folderName"]." (90 дней)" );
+		$this->sharedfunctions->writeToLog( implode("\t", $string), $this->uploadLogFileName );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
 
 	public function getFolderList( ) {
-		$filename = $this->getContentFilePath( $this->input->post("userID") );
+		$filename = $this->sharedfunctions->getContentFilePath( $this->input->post("userID") );
 		$filelist = json_decode(file_get_contents($filename), true);
 		$output   = array('<option value="0"> -- В корень -- </option>');
 		if ( isset( $filelist["folders"] ) ) {
@@ -525,48 +508,65 @@ class Storage extends CI_Controller {
 	}
 	// Нужен ли режим копирования? здесь реализован перенос
 	// ????????????????????????????????????
+
+	private function copyFiles( $filelist, $fileData, $target ) {
+		foreach ( $filelist["files"] as $key=>$itemData ) {
+			if ( in_array( $itemData["id"], $fileData['files'] ) ) {
+				$filelist["files"][$key]['parent'] = $target;
+				$string = array_push( 
+					$this->sharedfunctions->getMinimalLog( $fileData["userID"] ),
+					$itemData["id"],
+					$itemData["storageFilename"],
+					"Файл перенесён в: ".$target
+				);
+				array_push( $this->logOutput, implode( "\t", $string ) );
+			}
+		}
+		return $filelist;
+	}
+
+	private function copyFolders( $filelist, $fileData, $target ) {
+		foreach ( $filelist["folders"] as $key=>$itemData ) {
+			if ( in_array( $itemData["id"], $fileData["folders"] ) ) {
+				$filelist["folders"][$key]['parent'] = $target;
+				$string = array_push( 
+					$this->sharedfunctions->getMinimalLog( $fileData["userID"] ),
+					$itemData["id"],
+					$itemData["folderName"],
+					"Папка перенесена в: ".$target
+				);
+				array_push($this->logOutput, implode("\t", $string));
+			}
+		}
+		return $filelist;
+	}
+
 	public function copyToFolder( ) {
-		$logOutput = array();
+		$this->logOutput = array();
 		$fileData  = $this->input->post("items");
-		$filename  = $this->getContentFilePath( $fileData["userID"] );
+		$filename  = $this->sharedfunctions->getContentFilePath( $fileData["userID"] );
 		$filelist  = json_decode( file_get_contents($filename), true );
 		if ( isset( $fileData["files"] ) ) {
-			foreach ( $filelist["files"] as $key=>$itemData ) {
-				if ( in_array( $itemData["id"], $fileData['files'] ) ) {
-					$filelist["files"][$key]['parent'] = $this->input->post("targetFolder");
-					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $fileData["userID"], $itemData["id"], $itemData["storageFilename"], "Файл перенесён в: ".$this->input->post("targetFolder") );
-					array_push($logOutput, implode("\t", $string));
-				}
-			}
+			$filelist = $this->copyFiles( $filelist, $fileData, $this->input->post("targetFolder") );
 		}
 		if ( isset( $fileData["folders"] ) ) {
-			foreach ( $filelist["folders"] as $key=>$itemData ) {
-				if ( in_array( $itemData["id"], $fileData["folders"] ) ) {
-					$filelist["folders"][$key]['parent'] = $this->input->post("targetFolder");
-					$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $fileData["userID"], $itemData["id"], $itemData["folderName"], "Папка перенесена в: ".$this->input->post("targetFolder") );
-					array_push($logOutput, implode("\t", $string));
-				}
-			}
+			$filelist = $this->copyFolders( $filelist, $fileData, $this->input->post("targetFolder") );
 		}
 		file_put_contents( $filename, json_encode($filelist) );
-		$this->writeToLog( implode("\r\n", $logOutput), $this->operationsLogFileName );
+		$this->sharedfunctions->writeToLog( implode("\r\n", $this->logOutput), $this->operationsLogFileName );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
 
-	private function writeEmptyFileList( $userID ) {
-		$filename = $this->getContentFilePath( $userID );
-		$this->filesystem->makeUserDir( $userID );
-		file_put_contents( $filename, json_encode( array( "files" => array() , "folders"  => array() ) ) );
-	}
+
 
 	public function moveToUser( ) {
 		$fileData        = $this->input->post("items");
 		$targetUser      = $this->input->post("targetUserID");
-		$filename        = $this->getContentFilePath( $fileData["userID"] );
-		$targetfilename  = $this->getContentFilePath( $targetUser );
+		$filename        = $this->sharedfunctions->getContentFilePath( $fileData["userID"] );
+		$targetfilename  = $this->sharedfunctions->getContentFilePath( $targetUser );
 
 		if ( !file_exists($targetfilename) ) {
-			$this->writeEmptyFileList( $targetUser );
+			$this->filesystem->writeEmptyFileList( $targetUser );
 		}
 
 		$fileLists = array(
@@ -633,15 +633,12 @@ class Storage extends CI_Controller {
 		if ( !$leaveAcopy ) {
 			unset( $fileLists["source"]["folders"][$key] );
 		}
-		$string = array( 
-			date("Y-m-d H:i:s"),
-			$this->input->ip_address(),
-			$folderData["userID"],
+		$string = array_push( $this->sharedfunctions->getMinimalLog( $folderData["userID"] ),
 			$folderData["id"],
 			$folderData["folderName"],
 			"Папка ".( ( $leaveAcopy ) ? "скопирована" : "перенесена")." к пользователю ".$targetUser
 		);
-		$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+		$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
 		return $fileLists;
 	}
 
@@ -678,7 +675,7 @@ class Storage extends CI_Controller {
 					$oldStorageFilename,
 					"Файл ".( ( $leaveAcopy ) ? "скопирован" : "перенесен" )." к пользователю ".$itemData["userID"]." в ".$itemData["storageFilename"]
 				);
-				$this->writeToLog( implode("\t", $string), $this->operationsLogFileName );
+				$this->sharedfunctions->writeToLog( implode("\t", $string), $this->operationsLogFileName );
 			}
 		}
 		return $fileLists;
@@ -697,7 +694,7 @@ class Storage extends CI_Controller {
 
 
 	public function showRawData( $userID ) {
-		$fileName = $this->getContentFilePath( $userID );
+		$fileName = $this->sharedfunctions->getContentFilePath( $userID );
 		if ( file_exists( $fileName ) ) {
 			$file = file_get_contents( $fileName );
 			//header('Content-Type: application/json');
@@ -708,7 +705,7 @@ class Storage extends CI_Controller {
 	}
 
 	public function saveHTML( ) {
-		$htmlFileName  = $this->getUserDirPath( $this->input->post("userID") )."index.html";
+		$htmlFileName  = $this->sharedfunctions->getUserDirPath( $this->input->post("userID") )."index.html";
 		file_put_contents( $htmlFileName, $this->input->post("content") );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
@@ -717,7 +714,7 @@ class Storage extends CI_Controller {
 		$this->load->model("zipmodel");
 		$fileData   = $this->input->post("items");
 		$targetUser = $this->input->post("targetUserID");
-		$filename   = $this->getContentFilePath( $fileData["userID"] );
+		$filename   = $this->sharedfunctions->getContentFilePath( $fileData["userID"] );
 
 		$fileList   = json_decode(file_get_contents($filename), true);
 		$fileList   = $this->zipmodel->moveFilesForZip( $fileList, $fileData, $this->input->post("leaveAcopy") );
