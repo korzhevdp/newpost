@@ -8,6 +8,8 @@ class Storage extends CI_Controller {
 		if ( !opcache_is_script_cached("index.php") ) {
 			opcache_compile_file("index.php");
 		}
+		$this->load->model("sharedfunctions");
+		$this->load->model("filesystem");
 		header('Content-Type: application/json');
 	}
 
@@ -24,8 +26,6 @@ class Storage extends CI_Controller {
 	);
 	private $listD                 = array(); // буфер для переносимых папок
 	private $listC                 = array(); // буфер для путей папок
-	private $listZ                 = array(); // буфер для путей папок ZIP
-	private $listY                 = array(); // буфер для путей папок ZIP
 
 	private function getContentFilePath( $userID ) {
 		return $this->config->item("storageLocation").$userID.DIRECTORY_SEPARATOR."contents.json";
@@ -162,7 +162,7 @@ class Storage extends CI_Controller {
 				$fileSName = $this->getUserDirPath( $userID ).$item["storageFilename"];
 				$filelist['files'][$key]["fileSize"] = ( file_exists($fileSName) ) ? filesize($fileSName) : 0;
 				file_put_contents($filename, json_encode($filelist));
-				return $size;
+				return $filelist['files'][$key]["fileSize"];
 			}
 		}
 	}
@@ -389,7 +389,7 @@ class Storage extends CI_Controller {
 			foreach ( $fileData["files"] as $key=>$item ) {
 				if ( in_array( $item["id"], $itemsID["files"] ) ) {
 					$unlinkFile = $this->getUserDirPath( $item["userID"] ).$item["storageFilename"];
-					if ( $this->deleteFile( $unlinkFile ) ){
+					if ( $this->filesystem->deleteFile( $unlinkFile ) ){
 						unset( $fileData["files"][$key] );
 					}
 					$string     = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $item["userID"], $item["id"], $item["storageFilename"], "Удалён файл: ".$item["originalFilename"] );
@@ -414,30 +414,19 @@ class Storage extends CI_Controller {
 		print floor( disk_free_space("D:") / ( 1024 * 1024 ) );
 	}
 
-	public function getUUID( ) {
-		return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-			mt_rand(0, 0xffff),
-			mt_rand(0, 0xffff),
-			mt_rand(0, 0xffff),
-			mt_rand(0, 0x0fff) | 0x4000,
-			mt_rand(0, 0x3fff) | 0x8000,
-			mt_rand(0, 0xffff),
-			mt_rand(0, 0xffff),
-			mt_rand(0, 0xffff)
-		);
-	}
+
 
 	public function uploadFiles( ) {
 		$userID   = $this->input->post("userID");
 		$filename = $this->getContentFilePath( $userID );
 		$filelist = json_decode(file_get_contents($filename), true);
-		$this->makeUserDir( $userID );
+		$this->filesystem->makeUserDir( $userID );
 
 		$newFileData = array(
-			"id"               => $this->getUUID(),
+			"id"               => $this->sharedfunctions->getUUID(),
 			"userID"           => $userID,
 			"parent"           => $this->input->post("folderID"),
-			"storageFilename"  => $this->getUUID(),
+			"storageFilename"  => $this->sharedfunctions->getUUID(),
 			"originalFilename" => $_FILES["files"]['name'],
 			"creationDate"     => date("U"),
 			"deletionDate"     => date("U") + (60 * 60 * 24 * $this->input->post("period")),
@@ -452,7 +441,14 @@ class Storage extends CI_Controller {
 		array_push( $filelist["files"], $newFileData );
 		file_put_contents( $filename, json_encode($filelist) );
 
-		$string = array( date("Y-m-d H:i:s"), $this->input->ip_address(), $newFileData["userID"], $newFileData["id"], $newFileData["storageFilename"], "На сервер загружен файл: ".$newFileData["originalFilename"] );
+		$string = array( 
+			date("Y-m-d H:i:s"),
+			$this->input->ip_address(),
+			$newFileData["userID"],
+			$newFileData["id"],
+			$newFileData["storageFilename"],
+			"На сервер загружен файл: ".$newFileData["originalFilename"]
+		);
 		$this->writeToLog( implode("\t", $string), $this->uploadLogFileName );
 	}
 
@@ -493,7 +489,7 @@ class Storage extends CI_Controller {
 		$filename      = $this->getContentFilePath( $userID );
 		$filelist      = json_decode(file_get_contents($filename), true);
 		$newFolderData = array(
-			"id"               => $this->getUUID(),
+			"id"               => $this->sharedfunctions->getUUID(),
 			"userID"           => $userID,
 			"parent"           => $this->input->post("folderID"),
 			"folderName"       => $this->input->post("folderName"),
@@ -559,7 +555,7 @@ class Storage extends CI_Controller {
 
 	private function writeEmptyFileList( $userID ) {
 		$filename = $this->getContentFilePath( $userID );
-		$this->makeUserDir( $userID );
+		$this->filesystem->makeUserDir( $userID );
 		file_put_contents( $filename, json_encode( array( "files" => array() , "folders"  => array() ) ) );
 	}
 
@@ -656,13 +652,13 @@ class Storage extends CI_Controller {
 				$oldStorageFilename = $itemData["storageFilename"];
 
 				// замена целевого userID, целевого имени хранимого файла и его папки
-				$itemData["id"]     = $this->getUUID();
+				$itemData["id"]     = $this->sharedfunctions->getUUID();
 				$itemData["userID"] = $targetUser;
 				$itemData["parent"] = ($newParent) ? $newParent : $itemData["parent"];
-				$itemData["storageFilename"] = $this->getUUID();
+				$itemData["storageFilename"] = $this->sharedfunctions->getUUID();
 				// !!!!!!!!!!!!!!!!!!!возможно ошибка! если так, то перенести $source до замены полей
-				$source             = $this->getUserDirPath( $itemData["userID"] ).$oldStorageFilename;
-				$target             = $this->getUserDirPath( $targetUser).$itemData["storageFilename"];
+				$source             = $this->sharedfunctions->getUserDirPath( $itemData["userID"] ).$oldStorageFilename;
+				$target             = $this->sharedfunctions->getUserDirPath( $targetUser).$itemData["storageFilename"];
 
 				array_push( $fileLists["target"]["files"], $itemData );
 
@@ -670,9 +666,9 @@ class Storage extends CI_Controller {
 					unset( $fileLists["source"]["files"][$key] );
 				}
 
-				$this->makeUserDir( $itemData["userID"] );
+				$this->filesystem->makeUserDir( $itemData["userID"] );
 
-				$this->moveFile( $source, $target, $leaveAcopy );
+				$this->filesystem->moveFile( $source, $target, $leaveAcopy );
 
 				$string = array(
 					date("Y-m-d H:i:s"),
@@ -698,41 +694,7 @@ class Storage extends CI_Controller {
 		return $output;
 	}
 
-	private function makeUserDir( $userID ) {
-		$userDir = $this->getUserDirPath( $userID );
-		if ( !file_exists( $userDir ) ) {
-			mkdir( $userDir );
-		}
-	}
 
-	private function copyFile( $source, $target ) {
-		$command = 'copy /B /Y /V "'.$source.'" "'.$target.'"';
-		shell_exec( $command );
-		if ( file_exists($target) ) {
-			return true;
-		}
-		//print $command." не скопирован\n";
-		return false;
-	}
-
-	private function deleteFile( $source ) {
-		$command = 'del /Q "'.$source.'"';
-		shell_exec( $command );
-		if ( file_exists($source) ) {
-			//print $command." не удалён\n";
-			return false;
-		}
-		return true;
-	}
-
-	// перенос файла -- композиция фунций копирования и удаления
-	private function moveFile( $source, $target, $leaveAcopy ) {
-		$this->copyFile( $source, $target );
-		if ( $leaveAcopy ) {
-			return true;
-		}
-		$this->deleteFile( $source );
-	}
 
 	public function showRawData( $userID ) {
 		$fileName = $this->getContentFilePath( $userID );
@@ -750,162 +712,15 @@ class Storage extends CI_Controller {
 		file_put_contents( $htmlFileName, $this->input->post("content") );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
 	}
-
-	private function processZipRootFolder( $folders, $folderID ) {
-		foreach ( $folders as $folder ) {
-			if ( $folder["id"] == $folderID ) {
-				return $folder;
-			}
-		}
-		return true;
-	}
-
-	// построение дерева от корня к ветвям
-	private function processZipSubfolders( $folders, $parentID ) {
-		foreach ( $folders as $folder ) {
-			if ( $folder["parent"] == $parentID ) {
-				array_push( $this->listZ, $folder );
-				$this->processZipSubfolders( $folders, $folder["id"] );
-			}
-		}
-		return true;
-	}
-
-	//построение дерева от ветви к корню
-	private function backTrackZipPath( $folders, $parentID ) {
-		foreach ( $folders as $folder ) {
-			if ( $folder["id"] == $parentID ) {
-				array_push( $this->listY, $folder );
-				$this->backTrackZipPath( $folders, $folder["parent"] );
-			}
-		}
-		return true;
-	}
-
-	private function getZipPath( $folders, $fileParentID, $topmostFolder, $mode="folder" ) {
-		$output      = array();
-		$this->listY = array();
-		foreach ( $folders as $folder ) {
-			if ( $folder["id"] == $fileParentID ) {
-				array_push( $this->listY, $folder );
-				$this->backTrackZipPath( $folders, $folder["parent"] );
-			}
-		}
-		foreach ( $this->listY as $listItem ) {
-			if ( $mode == "folder" ) {
-				array_push($output, $listItem["folderName"]);
-				if ( in_array( $listItem['id'], $topmostFolder ) ) {
-					break;
-				}
-				continue;
-			}
-			if ( in_array( $listItem['id'], $topmostFolder ) ) {
-				break;
-			}
-			array_push($output, $listItem["folderName"]);
-		}
-		return array_reverse($output);
-	}
-
-	private function prepareZipFolders( $path, $tempDiskPath ) {
-		foreach ( $path as $folder ) {
-			$tempDiskPath .= DIRECTORY_SEPARATOR.$folder;
-			if ( !file_exists( $tempDiskPath ) ){
-				$command   = 'mkdir "'.$tempDiskPath.'"';
-				shell_exec( $command );
-			}
-		}
-	}
-
-	private function moveFilesForZip( $fileList, $fileData, $leaveAcopy = 1 ) {
-		$this->listZ  = array();
-		$zipFolders   = array();
-		$tempDiskPath = $this->getUserDirPath( $fileData["userID"] )."temp".DIRECTORY_SEPARATOR;
-		$diskPath     = $this->getUserDirPath( $fileData["userID"] ).DIRECTORY_SEPARATOR;
-
-		if ( isset( $fileData['files'] ) ) {
-			foreach ( $fileList["files"] as $key=>$fileItemData ) {
-				if ( in_array($fileItemData["id"], $fileData['files'] ) ) {
-					$path   = $this->getZipPath( $fileList["folders"], $fileItemData["parent"], array( $fileItemData["parent"], "file" ) );
-
-					$this->prepareZipFolders($path, $tempDiskPath);
-					if ( !$leaveAcopy ) {
-						unset( $fileList["files"][$key] );
-					}
-					$source = $diskPath.$fileItemData["storageFilename"];
-					$target = $tempDiskPath.implode( DIRECTORY_SEPARATOR, $path).DIRECTORY_SEPARATOR.$fileItemData["originalFilename"];
-					$this->moveFile( $source, $target, $leaveAcopy );
-				}
-			}
-		}
-		// составляем список каталогов, чьи файлы надо перенести в zip
-		if ( isset( $fileData['folders'] ) ) {
-			foreach ( $fileList['folders'] as $key=>$itemData ) {
-				if ( in_array( $itemData["id"], $fileData['folders'] ) ) {
-					array_push( $this->listZ, $this->processZipRootFolder( $fileList['folders'], $itemData["id"] ) );
-					$this->processZipSubfolders( $fileList['folders'], $itemData["id"] );
-				}
-			}
-			foreach ( $this->listZ as $zipFolderData ) {
-				array_push( $zipFolders, $zipFolderData['id'] );
-			}
-			//директории со всеми вложенностями
-			foreach ( $zipFolders as $folderID ) {
-				foreach ( $fileList["files"] as $key=>$fileItemData ) {
-					if ( $fileItemData["parent"] == $folderID ) {
-						$path   = $this->getZipPath( $fileList["folders"], $folderID, $fileData['folders'], "folder" );
-						$this->prepareZipFolders($path, $tempDiskPath);
-
-						if ( !$leaveAcopy ) {
-							unset( $fileList["files"][$key] );
-						}
-						$source = $diskPath.$fileItemData["storageFilename"];
-						$target = $tempDiskPath.implode( DIRECTORY_SEPARATOR, $path).DIRECTORY_SEPARATOR.$fileItemData["originalFilename"];
-						$this->moveFile( $source, $target, $leaveAcopy );
-					}
-				}
-			}
-		}
-
-		$storageFilename = $this->getUUID();
-		$zipFileData = array(
-			"id"               => $this->getUUID(),
-			"userID"           => $fileData["userID"],
-			"parent"           => 0,
-			"storageFilename"  => $storageFilename,
-			"originalFilename" => $this->input->post("zipName"),
-			"creationDate"     => date("U"),
-			"deletionDate"     => date("U") + (60 * 60 * 24 * 30),
-			"ownerIP"          => $this->input->ip_address(),
-			"ownerHost"        => "",
-			"downloadLimit"    => "-1",
-			"fileSize"         => 0,
-			"tags"             => "",
-			"comments"         => ""
-		);
-		$command = "7z a -r -aoa -tzip -bd -mmt1 -mx1 -o".$diskPath." ".$diskPath.$storageFilename." ".$tempDiskPath."*.*";
-		shell_exec($command);
-		$command = "del /S /Q ".$tempDiskPath."*.*";
-		//print $command;
-		shell_exec($command);
-
-		//ren "D:\ForFiles\storage\1611\ab15c549-f102-42d6-9d8d-9248c00e3fd0.zip" "D:\ForFiles\storage\1611\ab15c549-f102-42d6-9d8d-9248c00e3fd0"
-
-		$command = "ren \"".$diskPath.$storageFilename.".zip\" \"".$storageFilename."\"";
-		shell_exec($command);
-		//print $command."\n\n";
-		array_push( $fileList["files"], $zipFileData );
-
-		return $fileList;
-	}
-
+	
 	public function makeZip ( ) {
+		$this->load->model("zipmodel");
 		$fileData   = $this->input->post("items");
 		$targetUser = $this->input->post("targetUserID");
 		$filename   = $this->getContentFilePath( $fileData["userID"] );
 
 		$fileList   = json_decode(file_get_contents($filename), true);
-		$fileList   = $this->moveFilesForZip( $fileList, $fileData, $this->input->post("leaveAcopy") );
+		$fileList   = $this->zipmodel->moveFilesForZip( $fileList, $fileData, $this->input->post("leaveAcopy") );
 
 		file_put_contents( $filename, json_encode($fileList) );
 		print json_encode( array( "error" => 0, "status" => "OK" ) );
