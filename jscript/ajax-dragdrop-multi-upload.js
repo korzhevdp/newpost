@@ -1,15 +1,13 @@
 var dropArea       = $('#filelist'),
 	da_text        = $('#da_text'),
 	filename       = '',
-	complete_files = 0,
+	completedFiles = 0,
 	fileCount      = 0,
-	upload_error   = false,
+	errorOnUpload   = false,
 	diskSpaceNeed  = 0,
 	fileTrunk;
 
 function setAjaxUploadEvent () {
-	
-
 	// Проверка поддержки браузером
 	if ( window.FileReader === undefined ) {
 		da_text.html('Перетаскивание файлов не поддерживается браузером!');
@@ -30,30 +28,34 @@ function setAjaxUploadEvent () {
 
 	// Обрабатываем событие Drop
 	dropArea[0].ondrop = function(event) {
-		event.preventDefault();
-
-		// ресет счётчиков
-		complete_files = 0;
-		diskSpaceNeed  = 0;
-
-		dropArea.removeClass('drop_area_hover');
-		dropArea.addClass('drop_area_drop');
-
-		fileTrunk = event.dataTransfer.files; // шорткат для данных события drag'n'drop -- "ящик с файлами"
-		fileCount = fileTrunk.length;
-
-		for ( i in fileTrunk ) {
-			if ( fileTrunk[i].size === undefined ) {
-				continue;
-			}
-			diskSpaceNeed += fileTrunk[i].size;
-		}
-		diskSpaceNeed = diskSpaceNeed / (1024 * 1024); //МБ
-
-		if ( currentUserID ) {
-			uploadFiles( fileTrunk, diskSpaceNeed );
-		}
+		setFileDropEvent(event);
 	};
+}
+
+function setFileDropEvent(event) {
+	event.preventDefault();
+
+	// ресет счётчиков
+	completedFiles = 0;
+	diskSpaceNeed  = 0;
+
+	dropArea.removeClass('drop_area_hover');
+	dropArea.addClass('drop_area_drop');
+
+	fileTrunk = event.dataTransfer.files; // шорткат для данных события drag'n'drop -- "ящик с файлами"
+	fileCount = fileTrunk.length;
+
+	for ( i in fileTrunk ) {
+		if ( fileTrunk[i].size === undefined ) {
+			continue;
+		}
+		diskSpaceNeed += fileTrunk[i].size;
+	}
+	diskSpaceNeed = diskSpaceNeed / (1024 * 1024); //МБ
+
+	if ( currentUserID ) {
+		uploadFiles( fileTrunk, diskSpaceNeed );
+	}
 }
 
 function checkDiskSpace( freeDiskSpace, diskSpaceNeed ) {
@@ -97,33 +99,58 @@ function uploadFiles( fileTrunk, diskSpaceNeed ) {
 	});
 }
 
-// Показываем процент загрузки
-function uploadProgress( event ) {
-	var percent = parseInt( event.loaded / event.total * 100, 10);
-	if ( fileCount == 1 ) {
-		if ( percent < 100 ) {
-			da_text.html('Загрузка: ' + percent + '%');
-			$( '#drop_area_progress_left' ).css( 'width', percent + '%' );
-			return true;
-		}
-		if ( upload_error ) {
-			da_text.html('Ошибка при загрузке файла. Запись на диск не удалась');
-			return true;
-		}
-		da_text.html('Ожидание ответа сервера...<br><br><small>Сохранение файла.</small>');
+function showSinglefileUploadProgress( percent ) {
+	if ( percent < 100 ) {
+		da_text.html('Загрузка: ' + percent + '%');
+		$( '#drop_area_progress_left' ).css( 'width', percent + '%' );
 		return true;
 	}
+	if ( errorOnUpload ) {
+		da_text.html('Ошибка при загрузке файла. Запись на диск не удалась');
+		return true;
+	}
+	da_text.html('Ожидание ответа сервера...<br><br><small>Сохранение файла.</small>');
+	return true;
+}
 
+function showMultipleFileUploadProgress( percent ) {
 	if ( percent < 100 ) {
-		da_text.html('Загружено файлов: ' + complete_files + ' из ' + fileCount);
+		da_text.html('Загружено файлов: ' + completedFiles + ' из ' + fileCount);
 		$('#drop_area_progress_left').css('width', percent + '%');
 		return true;
 	}
-	if ( upload_error ) {
+	if ( errorOnUpload ) {
 		da_text.html('Ошибка при загрузке файла. Запись на диск не удалась');
 		return true;
 	}
 	da_text.html('Загрузка ' + fileCount + ' файлов завершена.');
+}
+
+// Показываем процент загрузки
+function uploadProgress( event ) {
+	var percent = parseInt( event.loaded / event.total * 100, 10);
+	if ( fileCount == 1 ) {
+		showSinglefileUploadProgress( percent );
+		return true;
+	}
+	showMultipleFileUploadProgress( percent )
+}
+
+function riseErrorNotification( event ) {
+	errorOnUpload = 1;
+	dropArea.addClass('error');
+	if ( event.target.status == 404 ) {
+		da_text.html('Произошла ошибка!<br><br>Сервер не найден! (' + event.target.status + ')');
+	}
+	if ( event.target.status == 500 ) {
+		da_text.html('Произошла ошибка!<br><br>Сервер сломался! (' + event.target.status + ')');
+	}
+	if ( event.target.status == 401 ) {
+		da_text.html('Произошла ошибка!<br><br>Сервер запутался и просит имя пользователя и пароль (' + event.target.status + ')');
+	}
+	if ( !event.target.status ) {
+		da_text.html('Произошла ошибка!<br><br>Возможно - попытка загрузить папку на сервер (' + event.target.status + ')');
+	}
 }
 
 // Пост обрабочик
@@ -131,34 +158,20 @@ function stateChange( event ) {
 	if ( event.target.readyState == 4 ) {
 		$('#drop_area_progress_left').css('width', 0);
 		if ( event.target.status == 200 ) {
-			complete_files++;
+			completedFiles++;
 			if ( fileCount == 1 ) {
 				da_text.html('Загрузка файла завершена');
 				showUserFiles( currentUserID, 1, currentFolder );
 				return true;
 			} 
-			if ( complete_files == fileCount ) {
+			if ( completedFiles == fileCount ) {
 				da_text.html('Загрузка ' + fileCount + ' файлов завершена');
 				showUserFiles( currentUserID, 1, currentFolder );
 				return true;
 			}
 			return true;
 		}
-
-		upload_error = 1;
-		dropArea.addClass('error');
-		if ( event.target.status == 404 ) {
-			da_text.html('Произошла ошибка!<br><br>Сервер не найден! (' + event.target.status + ')');
-		}
-		if ( event.target.status == 500 ) {
-			da_text.html('Произошла ошибка!<br><br>Сервер сломался! (' + event.target.status + ')');
-		}
-		if ( event.target.status == 401 ) {
-			da_text.html('Произошла ошибка!<br><br>Сервер запутался и просит имя пользователя и пароль (' + event.target.status + ')');
-		}
-		if ( !event.target.status ) {
-			da_text.html('Произошла ошибка!<br><br>Возможно - попытка загрузить папку на сервер (' + event.target.status + ')');
-		}
+		riseErrorNotification( event );
 		showUserFiles(currentUserID, 1, currentFolder);
 	}
 }
